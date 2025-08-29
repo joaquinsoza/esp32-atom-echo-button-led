@@ -69,10 +69,10 @@ ls /dev/cu.*
 # Look for something like: /dev/cu.usbserial-XXXXXXXX
 
 # Flash to device (use slower baud rate for reliability)
-idf.py -p /dev/cu.usbserial-5552A2D146 -b 115200 flash
+idf.py -p /dev/cu.usbserial-XXXXXXXX -b 115200 flash
 
 # Monitor serial output
-idf.py -p /dev/cu.usbserial-5552A2D146 monitor
+idf.py -p /dev/cu.usbserial-XXXXXXXX monitor
 # Press Ctrl+] to exit monitor
 ```
 
@@ -82,10 +82,10 @@ If you have issues flashing, try:
 
 ```bash
 # Erase flash completely and start fresh
-python -m esptool --port /dev/cu.usbserial-5552A2D146 --chip esp32 erase_flash
+python -m esptool --port /dev/cu.usbserial-XXXXXXXX --chip esp32 erase_flash
 
 # Then try flashing again with even slower baud rate
-idf.py -p /dev/cu.usbserial-5552A2D146 -b 9600 flash
+idf.py -p /dev/cu.usbserial-XXXXXXXX -b 9600 flash
 ```
 
 ## 📖 Understanding the Code
