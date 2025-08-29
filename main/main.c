@@ -1,7 +1,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "driver/rmt.h"
+#include "driver/rmt_tx.h"
+#include "driver/rmt_encoder.h"
 #include "esp_log.h"
 
 static const char *TAG = "ATOM_ECHO";
@@ -17,36 +18,29 @@ static const char *TAG = "ATOM_ECHO";
 #define WS2812_T1L_NS   350
 #define WS2812_RESET_US 280
 
-// LED state
+// LED state and RMT handles
 static bool led_on = false;
-static rmt_item32_t led_data[24];  // 24 bits for single RGB LED
+static rmt_channel_handle_t led_chan = NULL;
+static rmt_encoder_handle_t led_encoder = NULL;
+static uint8_t led_strip_pixels[3];  // RGB data buffer
 
-// Convert nanoseconds to RMT ticks
-static uint32_t ns_to_ticks(uint32_t ns) {
-    return (ns / 12.5);  // 80MHz clock = 12.5ns per tick
-}
+// WS2812 timing parameters in nanoseconds
+#define RMT_LED_STRIP_RESOLUTION_HZ 10000000 // 10MHz resolution, 100ns per tick
 
 // Set RGB color for WS2812
 static void ws2812_set_color(uint8_t red, uint8_t green, uint8_t blue) {
-    uint32_t color = (green << 16) | (red << 8) | blue;  // GRB format for WS2812
+    // WS2812 expects GRB format
+    led_strip_pixels[0] = green;
+    led_strip_pixels[1] = red;
+    led_strip_pixels[2] = blue;
     
-    for (int i = 0; i < 24; i++) {
-        if (color & (1 << (23 - i))) {
-            // Send 1
-            led_data[i].level0 = 1;
-            led_data[i].duration0 = ns_to_ticks(WS2812_T1H_NS);
-            led_data[i].level1 = 0;
-            led_data[i].duration1 = ns_to_ticks(WS2812_T1L_NS);
-        } else {
-            // Send 0
-            led_data[i].level0 = 1;
-            led_data[i].duration0 = ns_to_ticks(WS2812_T0H_NS);
-            led_data[i].level1 = 0;
-            led_data[i].duration1 = ns_to_ticks(WS2812_T0L_NS);
-        }
-    }
-    
-    rmt_write_items(RMT_CHANNEL_0, led_data, 24, true);
+    // Transmit the color data
+    rmt_transmit_config_t tx_config = {
+        .loop_count = 0, // no transfer loop
+    };
+    ESP_ERROR_CHECK(rmt_transmit(led_chan, led_encoder, led_strip_pixels, sizeof(led_strip_pixels), &tx_config));
+    // Wait for transmission to complete
+    ESP_ERROR_CHECK(rmt_tx_wait_all_done(led_chan, portMAX_DELAY));
 }
 
 void app_main(void) {
@@ -62,26 +56,36 @@ void app_main(void) {
     };
     gpio_config(&button_config);
     
-    // Configure RMT for WS2812 LED
-    rmt_config_t rmt_cfg = {
-        .rmt_mode = RMT_MODE_TX,
-        .channel = RMT_CHANNEL_0,
+    // Configure RMT TX channel for WS2812 LED
+    rmt_tx_channel_config_t tx_chan_config = {
         .gpio_num = LED_PIN,
-        .clk_div = 1,  // 80MHz clock
-        .mem_block_num = 1,
-        .tx_config = {
-            .loop_en = false,
-            .carrier_freq_hz = 0,
-            .carrier_duty_percent = 0,
-            .carrier_level = RMT_CARRIER_LEVEL_LOW,
-            .carrier_en = false,
-            .idle_level = RMT_IDLE_LEVEL_LOW,
-            .idle_output_en = true,
-        }
+        .clk_src = RMT_CLK_SRC_DEFAULT, // use APB clock source
+        .resolution_hz = RMT_LED_STRIP_RESOLUTION_HZ,
+        .mem_block_symbols = 64, // memory block size
+        .trans_queue_depth = 4, // set the number of transactions that can be pending in the background
     };
+    ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_chan_config, &led_chan));
     
-    ESP_ERROR_CHECK(rmt_config(&rmt_cfg));
-    ESP_ERROR_CHECK(rmt_driver_install(RMT_CHANNEL_0, 0, 0));
+    // Configure bytes encoder for WS2812
+    rmt_bytes_encoder_config_t encoder_config = {
+        .bit0 = {
+            .level0 = 1,
+            .duration0 = WS2812_T0H_NS / 100,  // 100ns per tick at 10MHz
+            .level1 = 0,
+            .duration1 = WS2812_T0L_NS / 100,
+        },
+        .bit1 = {
+            .level0 = 1,
+            .duration0 = WS2812_T1H_NS / 100,
+            .level1 = 0,
+            .duration1 = WS2812_T1L_NS / 100,
+        },
+        .flags.msb_first = 1, // WS2812 expects MSB first
+    };
+    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&encoder_config, &led_encoder));
+    
+    // Enable RMT TX channel
+    ESP_ERROR_CHECK(rmt_enable(led_chan));
     
     // Turn off LED initially
     ws2812_set_color(0, 0, 0);
